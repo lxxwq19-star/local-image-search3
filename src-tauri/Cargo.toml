@@ -27,7 +27,7 @@ tauri-plugin-shell = "2"
 ort = { version = "2.0.0-rc.12", features = ["directml"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-ort = { version = "2.0.0-rc.12" }
+ort = { version = "2.0.0-rc.12", features = ["coreml"] }
 
 [target.'cfg(not(any(target_os = "windows", target_os = "macos")))'.dependencies]
 ort = { version = "2.0.0-rc.12" }

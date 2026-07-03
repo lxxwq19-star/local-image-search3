@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+﻿import { useState, useEffect } from 'react';
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
@@ -67,6 +67,10 @@ function App() {
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
   const [subfolderLists, setSubfolderLists] = useState<Record<string, any[]>>({});
 
+  // 二级子文件夹展开状态（Bug 1 修复）
+  const [expandedSubfolders, setExpandedSubfolders] = useState<Set<string>>(new Set());
+  const [subSubfolderLists, setSubSubfolderLists] = useState<Record<string, any[]>>({});
+
   // 二次确认弹窗状态
   const [confirmDialog, setConfirmDialog] = useState<{
     show: boolean;
@@ -118,6 +122,40 @@ function App() {
     }
   };
 
+  // 展开/折叠一级子文件夹的子文件夹（二级子文件夹）(Bug 1 修复)
+  const handleToggleExpandSubfolder = async (subfolderPath: string) => {
+    const next = new Set(expandedSubfolders);
+    if (next.has(subfolderPath)) {
+      // 已展开 → 折叠
+      next.delete(subfolderPath);
+      setExpandedSubfolders(next);
+    } else {
+      // 未展开 → 先展开，再加载二级子文件夹
+      next.add(subfolderPath);
+      setExpandedSubfolders(next);
+      if (!subSubfolderLists[subfolderPath]) {
+        try {
+          const result = await invoke<{ subfolders: any[] }>('get_subfolders', { rootPath: subfolderPath });
+          const list = result.subfolders || [];
+          if (list.length > 0) {
+            setSubSubfolderLists(prev => ({ ...prev, [subfolderPath]: list }));
+          } else {
+            // 没有子文件夹，自动折叠
+            const next2 = new Set(expandedSubfolders);
+            next2.delete(subfolderPath);
+            setExpandedSubfolders(next2);
+          }
+        } catch (err) {
+          console.warn('[App] Failed to load sub-subfolders:', err);
+          // 加载失败也折叠
+          const next2 = new Set(expandedSubfolders);
+          next2.delete(subfolderPath);
+          setExpandedSubfolders(next2);
+        }
+      }
+    }
+  };
+
   // 切换子文件夹启用状态
   const handleToggleSubfolder = async (subfolderPath: string) => {
     try {
@@ -129,6 +167,15 @@ function App() {
       if (rootPath) {
         const result = await invoke<{ subfolders: any[] }>('get_subfolders', { rootPath: rootPath });
         setSubfolderLists(prev => ({ ...prev, [rootPath]: result.subfolders || [] }));
+      }
+      // Bug 2 修复：如果该子文件夹已展开，也刷新其二级子文件夹列表
+      if (expandedSubfolders.has(subfolderPath)) {
+        try {
+          const result = await invoke<{ subfolders: any[] }>('get_subfolders', { rootPath: subfolderPath });
+          setSubSubfolderLists(prev => ({ ...prev, [subfolderPath]: result.subfolders || [] }));
+        } catch (err) {
+          console.warn('[App] Failed to refresh sub-subfolders after toggle:', err);
+        }
       }
     } catch (err) {
       console.error('[App] Failed to toggle subfolder:', err);
@@ -282,6 +329,31 @@ function App() {
       await invoke<boolean>('toggle_path', { path });
       await loadPaths();
       await loadIndexStatus();
+      // Bug 2 修复：刷新所有已加载的子文件夹列表缓存
+      // 后端 toggle_path 会级联更新子文件夹，但前端缓存还是旧的
+      const updatedKeys = Object.keys(subfolderLists);
+      if (updatedKeys.length > 0) {
+        for (const key of updatedKeys) {
+          try {
+            const result = await invoke<{ subfolders: any[] }>('get_subfolders', { rootPath: key });
+            setSubfolderLists(prev => ({ ...prev, [key]: result.subfolders || [] }));
+          } catch (err) {
+            console.warn('[App] Failed to refresh subfolder list for', key, ':', err);
+          }
+        }
+      }
+      // 同时刷新二级子文件夹缓存
+      const updatedSubKeys = Object.keys(subSubfolderLists);
+      if (updatedSubKeys.length > 0) {
+        for (const key of updatedSubKeys) {
+          try {
+            const result = await invoke<{ subfolders: any[] }>('get_subfolders', { rootPath: key });
+            setSubSubfolderLists(prev => ({ ...prev, [key]: result.subfolders || [] }));
+          } catch (err) {
+            console.warn('[App] Failed to refresh sub-subfolder list for', key, ':', err);
+          }
+        }
+      }
     } catch (err) {
       console.error('切换路径状态失败:', err);
       setError(`切换路径状态失败: ${err}`);
@@ -442,6 +514,12 @@ function App() {
     );
   };
 
+  // ========= 辅助：计算大文件夹的有效启用状态 =========
+  const getEffectivePathEnabled = (p: any): boolean => {
+    const list = subfolderLists[p.path];
+    if (!list || list.length === 0) return p.enabled;
+    return list.every((sf: any) => sf.effective_enabled !== false);
+  };
   const renderHome = () => (
     <div id="page-home" className={`page ${currentPage === 'home' ? 'active' : ''}`}>
       {/* 索引进行中提示 */}
@@ -652,9 +730,9 @@ function App() {
 
                       {/* 启用/禁用开关 */}
                       <button
-                        className={`path-toggle ${p.enabled ? 'on' : ''}`}
+                        className={`path-toggle ${getEffectivePathEnabled(p) ? 'on' : ''}`}
                         onClick={() => handleTogglePath(p.path)}
-                        title={p.enabled ? '点击禁用' : '点击启用'}
+                        title={getEffectivePathEnabled(p) ? "点击禁用" : "点击启用"}
                       >
                         <span className="toggle-dot"></span>
                       </button>
@@ -692,20 +770,89 @@ function App() {
                       <div className="subfolder-list">
                         {subfolderLists[p.path] && subfolderLists[p.path].length > 0 ? (
                           subfolderLists[p.path].map((sf: any) => (
-                            <div key={sf.subfolder_path} className={`subfolder-item ${!sf.enabled ? 'subfolder-item-disabled' : ''}`}>
-                              <button
-                                className={`subfolder-toggle ${sf.enabled ? 'on' : ''}`}
-                                onClick={() => handleToggleSubfolder(sf.subfolder_path)}
-                                title={sf.enabled ? '点击禁用' : '点击启用'}
-                              >
-                                <span className="toggle-dot"></span>
-                              </button>
-                              <span className="subfolder-name" title={sf.subfolder_path}>
-                                {sf.subfolder_path.split(/[/\\]/).pop()}
-                              </span>
-                              <span className="subfolder-count">
-                                {sf.indexed_count > 0 ? `${sf.indexed_count} 张` : '未索引'}
-                              </span>
+                            <div key={sf.subfolder_path}>
+                              {/* 一级子文件夹 item */}
+                              <div className={`subfolder-item ${sf.effective_enabled === false ? "subfolder-item-disabled" : ''}`}>
+                                {/* 展开按钮：有子文件夹才显示 (Bug 1 修复) */}
+                                {sf.has_children && (
+                                  <button
+                                    className="subfolder-expand"
+                                    onClick={(e) => { e.stopPropagation(); handleToggleExpandSubfolder(sf.subfolder_path); }}
+                                    title="展开二级子文件夹"
+                                  >
+                                    {expandedSubfolders.has(sf.subfolder_path) ? '▼' : '▶'}
+                                  </button>
+                                )}
+
+                                {/* 启用/禁用开关 */}
+                                <button
+                                  className={`subfolder-toggle ${sf.effective_enabled !== false ? 'on' : ''}`}
+                                  onClick={() => handleToggleSubfolder(sf.subfolder_path)}
+                                  title={sf.enabled ? '点击禁用' : '点击启用'}
+                                >
+                                  <span className="toggle-dot"></span>
+                                </button>
+
+                                {/* 子文件夹名称 */}
+                                <span className="subfolder-name" title={sf.subfolder_path}>
+                                  {sf.subfolder_path.split(/[/\\]/).pop()}
+                                </span>
+
+                                {/* 图片计数 */}
+                                <span className="subfolder-count">
+                                  {sf.indexed_count > 0 ? `${sf.indexed_count} 张` : '未索引'}
+                                </span>
+                              </div>
+
+                              {/* 二级子文件夹列表 (Bug 1 修复) */}
+                              {expandedSubfolders.has(sf.subfolder_path) && (
+                                <div className="subfolder-list-level2">
+                                  {subSubfolderLists[sf.subfolder_path] && subSubfolderLists[sf.subfolder_path].length > 0 ? (
+                                    subSubfolderLists[sf.subfolder_path].map((ssf: any) => (
+                                      <div key={ssf.subfolder_path} className={`subfolder-item-level2 ${ssf.effective_enabled === false ? "subfolder-item-disabled" : ''}`}>
+                                        {/* 二级子文件夹开关 */}
+                                        <button
+                                          className={`subfolder-toggle ${ssf.effective_enabled !== false ? 'on' : ''}`}
+                                          onClick={async () => {
+                                            try {
+                                              await invoke('toggle_subfolder', { subfolderPath: ssf.subfolder_path });
+                                              // 刷新二级子文件夹列表（key 是一级子文件夹路径）
+                                              const result = await invoke<{ subfolders: any[] }>('get_subfolders', { rootPath: sf.subfolder_path });
+                                              setSubSubfolderLists(prev => ({ ...prev, [sf.subfolder_path]: result.subfolders || [] }));
+                                              // 刷新一级子文件夹列表（重新计算 effective_enabled，级联更新父级显示）
+                                              try {
+                                                const result1 = await invoke<{ subfolders: any[] }>('get_subfolders', { rootPath: p.path });
+                                                setSubfolderLists(prev => ({ ...prev, [p.path]: result1.subfolders || [] }));
+                                              } catch (err) {
+                                                console.warn('[App] 刷新一级列表失败:', err);
+                                              }
+                                            } catch (err) {
+                                              console.error('[App] Failed to toggle level-2 subfolder:', err);
+                                            }
+                                          }}
+                                          title={ssf.enabled ? '点击禁用' : '点击启用'}
+                                        >
+                                          <span className="toggle-dot"></span>
+                                        </button>
+
+                                        {/* 二级子文件夹名称 */}
+                                        <span className="subfolder-name-level2" title={ssf.subfolder_path}>
+                                          {ssf.subfolder_path.split(/[/\\]/).pop()}
+                                        </span>
+
+                                        {/* 二级子文件夹计数 */}
+                                        <span className="subfolder-count-level2">
+                                          {ssf.indexed_count > 0 ? `${ssf.indexed_count} 张` : '未索引'}
+                                        </span>
+                                      </div>
+                                    ))
+                                  ) : (
+                                    <div style={{ padding: '6px 16px 6px 52px', fontSize: 12, color: '#999' }}>
+                                      未扫描到二级子文件夹
+                                    </div>
+                                  )}
+                                </div>
+                              )}
                             </div>
                           ))
                         ) : (
@@ -897,3 +1044,4 @@ function App() {
 }
 
 export default App;
+

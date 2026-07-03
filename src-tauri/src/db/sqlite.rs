@@ -75,7 +75,45 @@ pub fn toggle_path(conn: &Connection, path: &str) -> Result<bool> {
         "SELECT enabled FROM index_paths WHERE path = ?1", params![normalized],
         |row| row.get(0),
     )?;
-    Ok(enabled != 0)
+    let enabled_bool = enabled != 0;
+
+    // 级联：关闭时同步关闭所有子文件夹（一级+二级）
+    if !enabled_bool {
+        conn.execute(
+            "UPDATE indexed_subfolders SET enabled = 0 WHERE root_path = ?1",
+            params![normalized],
+        )?;
+        let l1_list: Vec<String> = {
+            let mut stmt = conn.prepare("SELECT subfolder_path FROM indexed_subfolders WHERE root_path = ?1")?;
+            let rows = stmt.query_map(params![normalized], |row| row.get(0))?;
+            rows.collect::<Result<_>>()?
+        };
+        for l1 in l1_list {
+            conn.execute(
+                "UPDATE indexed_subfolders SET enabled = 0 WHERE root_path = ?1",
+                params![l1],
+            )?;
+        }
+    } else {
+        // 级联：开启时同步开启所有子文件夹（一级+二级）
+        conn.execute(
+            "UPDATE indexed_subfolders SET enabled = 1 WHERE root_path = ?1",
+            params![normalized],
+        )?;
+        let l1_list: Vec<String> = {
+            let mut stmt = conn.prepare("SELECT subfolder_path FROM indexed_subfolders WHERE root_path = ?1")?;
+            let rows = stmt.query_map(params![normalized], |row| row.get(0))?;
+            rows.collect::<Result<_>>()?
+        };
+        for l1 in l1_list {
+            conn.execute(
+                "UPDATE indexed_subfolders SET enabled = 1 WHERE root_path = ?1",
+                params![l1],
+            )?;
+        }
+    }
+
+    Ok(enabled_bool)
 }
 
 pub fn update_path_count(conn: &Connection, path: &str, count: i64) -> Result<()> {
@@ -122,35 +160,39 @@ pub fn init_subfolders_table(conn: &Connection) -> Result<()> {
 }
 
 /// Scan subfolders under a root path (up to 2 levels deep).
-/// Returns (level1 list, level2 list).
-pub fn scan_subfolders(root: &str) -> Vec<String> {
-    let mut result = Vec::new();
+/// Returns (level1 list, level2 map: level1_path -> [level2_paths]).
+pub fn scan_subfolders(root: &str) -> (Vec<String>, std::collections::HashMap<String, Vec<String>>) {
+    let mut level1 = Vec::new();
+    let mut level2_map = std::collections::HashMap::new();
     let root = std::path::Path::new(root);
-    if !root.exists() { return result; }
+    if !root.exists() { return (level1, level2_map); }
 
     // Level 1
     if let Ok(entries) = std::fs::read_dir(root) {
         for entry in entries.flatten() {
             if entry.path().is_dir() {
-                result.push(entry.path().to_string_lossy().to_string());
+                level1.push(entry.path().to_string_lossy().to_string());
             }
         }
     }
 
     // Level 2
-    let level1_clone = result.clone();
-    for l1 in level1_clone {
-        let p = std::path::Path::new(&l1);
+    for l1 in &level1 {
+        let mut level2 = Vec::new();
+        let p = std::path::Path::new(l1);
         if let Ok(entries) = std::fs::read_dir(p) {
             for entry in entries.flatten() {
                 if entry.path().is_dir() {
-                    result.push(entry.path().to_string_lossy().to_string());
+                    level2.push(entry.path().to_string_lossy().to_string());
                 }
             }
         }
+        if !level2.is_empty() {
+            level2_map.insert(l1.clone(), level2);
+        }
     }
 
-    result
+    (level1, level2_map)
 }
 
 /// Upsert subfolders into the table (insert if not exist, keep enabled state).
@@ -166,13 +208,11 @@ pub fn upsert_subfolders(conn: &Connection, root_path: &str, subfolders: &[Strin
     Ok(())
 }
 
-/// Update indexed_count for all subfolders under a root path.
-/// Counts images from the images table whose path starts with the subfolder path.
+/// Update indexed_count for all subfolders under a root path (including level 2).
 pub fn update_subfolder_counts(conn: &Connection, root_path: &str) -> Result<()> {
-    // Get all subfolders for this root
-    let subfolders = get_subfolders(conn, root_path)?;
-    for sf in &subfolders {
-        // Normalize path separator for LIKE query
+    // Update level 1 subfolders
+    let l1_list = get_subfolders(conn, root_path)?;
+    for sf in &l1_list {
         let pattern = format!("{}\\%", sf.subfolder_path.replace('/', "\\"));
         let count: i64 = conn.query_row(
             "SELECT COUNT(*) FROM images WHERE path LIKE ?1",
@@ -184,10 +224,26 @@ pub fn update_subfolder_counts(conn: &Connection, root_path: &str) -> Result<()>
             params![count, sf.subfolder_path],
         )?;
     }
+    // Update level 2 subfolders
+    for sf in &l1_list {
+        let l2_list = get_subfolders(conn, &sf.subfolder_path)?;
+        for l2 in &l2_list {
+            let pattern = format!("{}\\%", l2.subfolder_path.replace('/', "\\"));
+            let count: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM images WHERE path LIKE ?1",
+                params![pattern],
+                |row| row.get(0),
+            ).unwrap_or(0);
+            conn.execute(
+                "UPDATE indexed_subfolders SET indexed_count = ?1 WHERE subfolder_path = ?2",
+                params![count, l2.subfolder_path],
+            )?;
+        }
+    }
     Ok(())
 }
 
-/// Get all subfolders for a root path.
+/// Get all subfolders for a root path (with has_children flag).
 pub fn get_subfolders(conn: &Connection, root_path: &str) -> Result<Vec<IndexSubfolder>> {
     let mut stmt = conn.prepare(
         "SELECT id, root_path, subfolder_path, enabled, indexed_count
@@ -204,6 +260,22 @@ pub fn get_subfolders(conn: &Connection, root_path: &str) -> Result<Vec<IndexSub
     })?;
     let mut result = Vec::new();
     for row in rows { result.push(row?); }
+    Ok(result)
+}
+
+/// Get all subfolders for a root path, with has_children flag.
+/// Returns Vec of (IndexSubfolder, has_children).
+pub fn get_subfolders_with_children(conn: &Connection, root_path: &str) -> Result<Vec<(IndexSubfolder, bool)>> {
+    let subfolders = get_subfolders(conn, root_path)?;
+    let mut result = Vec::new();
+    for sf in subfolders {
+        let has_children: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM indexed_subfolders WHERE root_path = ?1",
+            params![sf.subfolder_path],
+            |row| row.get(0),
+        )?;
+        result.push((sf, has_children > 0));
+    }
     Ok(result)
 }
 
@@ -225,7 +297,7 @@ pub fn get_enabled_folder_paths(conn: &Connection) -> Result<(Vec<String>, Vec<S
     Ok((roots, subfolders))
 }
 
-/// Toggle a subfolder's enabled state.
+/// Toggle a subfolder's enabled state (with cascade to children).
 pub fn toggle_subfolder(conn: &Connection, subfolder_path: &str) -> Result<bool> {
     conn.execute(
         "UPDATE indexed_subfolders SET enabled = NOT enabled WHERE subfolder_path = ?1",
@@ -236,11 +308,40 @@ pub fn toggle_subfolder(conn: &Connection, subfolder_path: &str) -> Result<bool>
         params![subfolder_path],
         |row| row.get(0),
     )?;
-    Ok(enabled != 0)
+    let enabled_bool = enabled != 0;
+
+    // Cascade: update all subfolders whose root_path == subfolder_path
+    conn.execute(
+        "UPDATE indexed_subfolders SET enabled = ?1 WHERE root_path = ?2",
+        params![if enabled_bool { 1 } else { 0 }, subfolder_path],
+    )?;
+
+    Ok(enabled_bool)
 }
 
-/// Delete subfolders under a root path.
+/// Check if a path has any subfolders in the database.
+pub fn has_subfolders(conn: &Connection, root_path: &str) -> Result<bool> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM indexed_subfolders WHERE root_path = ?1",
+        params![root_path],
+        |row| row.get(0),
+    )?;
+    Ok(count > 0)
+}
+
+/// Delete subfolders under a root path (including level 2).
 pub fn delete_subfolders(conn: &Connection, root_path: &str) -> Result<()> {
+    // Get level 1 subfolder paths before deleting (to find level 2)
+    let l1_list: Vec<String> = {
+        let mut stmt = conn.prepare("SELECT subfolder_path FROM indexed_subfolders WHERE root_path = ?1")?;
+        let rows = stmt.query_map(params![root_path], |row| row.get(0))?;
+        rows.collect::<Result<_>>()?
+    };
+    // Delete level 2 subfolders (whose root_path is a level 1 path)
+    for l1 in l1_list {
+        conn.execute("DELETE FROM indexed_subfolders WHERE root_path = ?1", params![l1])?;
+    }
+    // Delete level 1 subfolders
     conn.execute(
         "DELETE FROM indexed_subfolders WHERE root_path = ?1",
         params![root_path],

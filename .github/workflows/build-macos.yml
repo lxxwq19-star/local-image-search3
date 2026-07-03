@@ -2,9 +2,17 @@ name: Build macOS
 
 on:
   push:
-    tags:
-      - 'v*'
+    tags: ["v*"]
   workflow_dispatch:
+
+# ===== 签名说明 =====
+# 本 workflow 使用 Ad-hoc 签名（无需 Apple 开发者证书）
+# - signingIdentity: "-"  → 本地自签名
+# - codesign --deep --sign -  → 递归签名所有内嵌二进制
+# - 用户下载后需执行 xattr 命令移除隔离标记（见 README）
+# 
+# 如果有 Apple 开发者证书，取消注释下方的证书步骤并配置 GitHub Secrets：
+#   APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD, APPLE_SIGN_IDENTITY
 
 jobs:
   build-intel:
@@ -18,7 +26,7 @@ jobs:
         with:
           node-version: 22
 
-      - name: Setup Rust
+      - name: Setup Rust (Intel)
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-apple-darwin
@@ -31,31 +39,49 @@ jobs:
         run: npm run build
         working-directory: src
 
-      - name: Disable macOS code signing for CI
-        run: |
-          node -e "
-            const fs = require('fs');
-            const cfg = JSON.parse(fs.readFileSync('tauri.conf.json', 'utf8'));
-            cfg.bundle = cfg.bundle || {};
-            cfg.bundle.macOS = cfg.bundle.macOS || {};
-            cfg.bundle.macOS.hardenedRuntime = false;
-            cfg.bundle.macOS.signingIdentity = null;
-            delete cfg.bundle.macOS.frameworks;
-            fs.writeFileSync('tauri.conf.json', JSON.stringify(cfg, null, 2));
-            console.log('Disabled macOS code signing for CI');
-          "
-        working-directory: src-tauri
-
       - name: Add Tauri CLI to PATH
         run: echo "${{ github.workspace }}/src/node_modules/.bin" >> $GITHUB_PATH
 
       - name: Build Tauri app (Intel)
         run: tauri build
+        env:
+          TAURI_SIGNING_IDENTITY: "-"
 
-      - name: Upload Intel artifact
+      # ===== Ad-hoc 签名（无证书也必须执行，否则 app 会崩溃）=====
+      - name: Ad-hoc sign app bundle
+        run: |
+          APP=$(find src-tauri/target -name "*.app" -type d | head -1)
+          echo "Signing app: $APP"
+          codesign --force --deep --sign - --options runtime "$APP"
+          codesign --verify -vv "$APP"
+
+      # ===== 可选：如有证书，取消注释以下两步 =====
+      # - name: Import Certificate
+      #   if: secrets.APPLE_CERTIFICATE != ''
+      #   uses: apple-actions/import-codesign-certificate@v1
+      #   with:
+      #     p12-filepath: ${{ secrets.APPLE_CERTIFICATE }}
+      #     p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      #
+      # - name: Re-sign with Developer ID
+      #   if: secrets.APPLE_CERTIFICATE != ''
+      #   run: |
+      #     APP=$(find src-tauri/target -name "*.app" -type d | head -1)
+      #     codesign --force --deep --sign "${{ secrets.APPLE_SIGN_IDENTITY }}" --options runtime "$APP"
+      #
+      # - name: Notarize
+      #   if: secrets.APPLE_CERTIFICATE != ''
+      #   uses: devbotsxyz/xcode-notarize@v1
+      #   with:
+      #     product-path: ${{ steps.find-app.outputs.app_path }}
+      #     primary-bundle-id: "com.localimagesearch.app"
+      #     apple-id: ${{ secrets.APPLE_ID }}
+      #     app-password: ${{ secrets.APPLE_APP_PASSWORD }}
+
+      - name: Upload Intel DMG
         uses: actions/upload-artifact@v4
         with:
-          name: macos-intel
+          name: local-image-search-macos-intel
           path: src-tauri/target/release/bundle/dmg/*.dmg
 
   build-arm:
@@ -69,7 +95,7 @@ jobs:
         with:
           node-version: 22
 
-      - name: Setup Rust
+      - name: Setup Rust (Apple Silicon)
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin
@@ -82,29 +108,25 @@ jobs:
         run: npm run build
         working-directory: src
 
-      - name: Disable macOS code signing for CI
-        run: |
-          node -e "
-            const fs = require('fs');
-            const cfg = JSON.parse(fs.readFileSync('tauri.conf.json', 'utf8'));
-            cfg.bundle = cfg.bundle || {};
-            cfg.bundle.macOS = cfg.bundle.macOS || {};
-            cfg.bundle.macOS.hardenedRuntime = false;
-            cfg.bundle.macOS.signingIdentity = null;
-            delete cfg.bundle.macOS.frameworks;
-            fs.writeFileSync('tauri.conf.json', JSON.stringify(cfg, null, 2));
-            console.log('Disabled macOS code signing for CI');
-          "
-        working-directory: src-tauri
-
       - name: Add Tauri CLI to PATH
         run: echo "${{ github.workspace }}/src/node_modules/.bin" >> $GITHUB_PATH
 
       - name: Build Tauri app (Apple Silicon)
         run: tauri build
+        env:
+          TAURI_SIGNING_IDENTITY: "-"
 
-      - name: Upload ARM artifact
+      - name: Ad-hoc sign app bundle
+        run: |
+          APP=$(find src-tauri/target -name "*.app" -type d | head -1)
+          echo "Signing app: $APP"
+          codesign --force --deep --sign - --options runtime "$APP"
+          codesign --verify -vv "$APP"
+
+      # ===== 可选：如有证书，取消注释（同 Intel job）=====
+
+      - name: Upload Apple Silicon DMG
         uses: actions/upload-artifact@v4
         with:
-          name: macos-arm
+          name: local-image-search-macos-arm
           path: src-tauri/target/release/bundle/dmg/*.dmg

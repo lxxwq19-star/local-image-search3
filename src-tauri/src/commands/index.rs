@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 use crate::db;
 use crate::index::DualIndex;
 use crate::models::{self, OnnxModel};
+use rusqlite::params;
 use serde_json::json;
 use tauri::{Emitter, Manager};
 
@@ -78,12 +79,23 @@ pub async fn index_images(
 
     // Scan and upsert subfolders (up to 2 levels) for this root path
     {
-        let subfolders = db::scan_subfolders(&directory);
-        if !subfolders.is_empty() {
+        let (level1, level2_map) = db::scan_subfolders(&directory);
+        if !level1.is_empty() {
             let conn = db_state.lock().map_err(|e| e.to_string())?;
-            db::upsert_subfolders(&conn, &directory, &subfolders)
-                .map_err(|e| format!("Failed to upsert subfolders: {}", e))?;
-            eprintln!("[INDEX] Scanned {} subfolders for {}", subfolders.len(), directory);
+            // Upsert level 1: root_path = directory
+            db::upsert_subfolders(&conn, &directory, &level1)
+                .map_err(|e| format!("Failed to upsert level 1 subfolders: {}", e))?;
+            // Upsert level 2: root_path = level1 path
+            for (l1, l2_list) in &level2_map {
+                db::upsert_subfolders(&conn, l1, l2_list)
+                    .map_err(|e| format!("Failed to upsert level 2 subfolders: {}", e))?;
+            }
+            eprintln!(
+                "[INDEX] Scanned {} level1 + {} level2 subfolders for {}",
+                level1.len(),
+                level2_map.values().map(|v| v.len()).sum::<usize>(),
+                directory
+            );
         }
     }
 
@@ -308,26 +320,62 @@ pub fn toggle_subfolder(app: tauri::AppHandle, subfolder_path: String) -> Result
     Ok(enabled)
 }
 
-/// Get subfolders for a root path.
+/// Get subfolders for a root path (with has_children + effective_enabled).
 #[tauri::command(rename_all = "camelCase")]
 pub fn get_subfolders(app: tauri::AppHandle, root_path: String) -> Result<serde_json::Value, String> {
     let db_state = app.state::<Mutex<rusqlite::Connection>>();
     let conn = db_state.lock().map_err(|e| e.to_string())?;
-    let subfolders = db::get_subfolders(&conn, &root_path)
+    eprintln!("[get_subfolders] root_path={}", root_path);
+    let list = db::get_subfolders_with_children(&conn, &root_path)
         .map_err(|e| format!("Failed to get subfolders: {}", e))?;
-    let result: Vec<serde_json::Value> = subfolders
+    let result: Vec<serde_json::Value> = list
         .into_iter()
-        .map(|sf| {
+        .map(|(sf, has_children)| {
+            // Compute effective_enabled: always check child subfolders in DB
+            // (don't rely solely on has_children flag which may be outdated)
+            let child_disabled_count: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM indexed_subfolders WHERE root_path = ?1 AND enabled = 0",
+                params![sf.subfolder_path],
+                |row| row.get(0),
+            ).unwrap_or(0);
+            let total_children: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM indexed_subfolders WHERE root_path = ?1",
+                params![sf.subfolder_path],
+                |row| row.get(0),
+            ).unwrap_or(0);
+
+            // If has children in DB: all must be enabled for effective_enabled = true
+            // If no children: use own enabled state
+            let effective_enabled = if total_children > 0 {
+                child_disabled_count == 0
+            } else {
+                sf.enabled
+            };
+            eprintln!("[get_subfolders]   sf={} enabled={} total_children={} child_disabled={} effective_enabled={}",
+                sf.subfolder_path, sf.enabled, total_children, child_disabled_count, effective_enabled);
+
+
             json!({
                 "id": sf.id,
                 "root_path": sf.root_path,
                 "subfolder_path": sf.subfolder_path,
                 "enabled": sf.enabled,
+                "effective_enabled": effective_enabled,
                 "indexed_count": sf.indexed_count,
+                "has_children": has_children,
             })
         })
         .collect();
     Ok(json!({ "subfolders": result }))
+}
+
+/// Check if a path has any subfolders recorded in the database.
+#[tauri::command(rename_all = "camelCase")]
+pub fn has_subfolders(app: tauri::AppHandle, root_path: String) -> Result<bool, String> {
+    let db_state = app.state::<Mutex<rusqlite::Connection>>();
+    let conn = db_state.lock().map_err(|e| e.to_string())?;
+    db::has_subfolders(&conn, &root_path)
+        .map_err(|e| format!("Failed to check subfolders: {}", e))
 }
 
 // ──────────────────────────────────────────────

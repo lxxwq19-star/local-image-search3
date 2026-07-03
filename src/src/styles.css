@@ -761,9 +761,17 @@
 /* ===== 多路径管理样式 ===== */
 .settings-modal {
   max-width: 480px;
-  max-height: 90vh;
+  max-height: 85vh;
   display: flex;
   flex-direction: column;
+}
+
+/* 设置弹窗主体 — 可滚动 */
+.settings-modal .modal-body {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+  padding: 16px 24px;
 }
 
 .paths-section,
@@ -1210,4 +1218,67 @@
 .path-action-btn.danger:hover {
   background: #ffebee;
   color: #e53935;
+}
+
+/* ===== 二级子文件夹列表 (Bug 1 修复) ===== */
+
+/* 二级子文件夹列表容器 */
+.subfolder-list-level2 {
+  background: #f0f0f0;
+  border-top: 1px solid #e0e0e0;
+}
+
+/* 二级子文件夹项 - 更深的缩进 */
+.subfolder-item-level2 {
+  display: flex;
+  align-items: center;
+  padding: 6px 16px 6px 52px;  /* 更深缩进：52px */
+  gap: 8px;
+  font-size: 12px;
+  transition: all 0.2s;
+}
+
+.subfolder-item-level2:hover {
+  background: rgba(0,0,0,0.02);
+}
+
+/* 二级子文件夹名称 */
+.subfolder-name-level2 {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+/* 二级子文件夹计数 */
+.subfolder-count-level2 {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+
+/* 一级子文件夹展开按钮（新增） */
+.subfolder-expand {
+  width: 20px;
+  height: 20px;
+  border: none;
+  background: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  color: var(--text-tertiary);
+  border-radius: 3px;
+  transition: all 0.2s;
+  flex-shrink: 0;
+  margin-right: 2px;
+}
+
+.subfolder-expand:hover {
+  background: var(--border);
+  color: var(--text-primary);
 }

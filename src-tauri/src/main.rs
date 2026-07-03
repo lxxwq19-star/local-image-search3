@@ -90,6 +90,7 @@ fn main() {
             commands::index::index_images,
             commands::index::toggle_subfolder,
             commands::index::get_subfolders,
+            commands::index::has_subfolders,
             commands::search::search_by_text,
             commands::search::search_by_image,
             commands::db::get_image_info,

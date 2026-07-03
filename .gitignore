@@ -30,4 +30,4 @@ Cargo.lock
 .env
 
 # ONNX models (too large for GitHub, download separately)
-models/
+/models/

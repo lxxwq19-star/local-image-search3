@@ -35,9 +35,7 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": [
-      "../models/*"
-    ],
+    "resources": [],
     "macOS": {
       "entitlements": "./entitlements.plist",
       "hardenedRuntime": true,

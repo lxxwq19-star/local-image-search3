@@ -38,13 +38,14 @@ jobs:
             cfg.bundle = cfg.bundle || {};
             cfg.bundle.macOS = cfg.bundle.macOS || {};
             cfg.bundle.macOS.hardenedRuntime = false;
-            cfg.bundle.macOS.frameworks = [];
+            cfg.bundle.macOS.signingIdentity = null;
+            delete cfg.bundle.macOS.frameworks;
             fs.writeFileSync('tauri.conf.json', JSON.stringify(cfg, null, 2));
             console.log('Disabled macOS code signing for CI');
           "
 
       - name: Build Tauri app (Intel)
-        run: cd src && npx tauri build
+        run: npx tauri build
         env:
           CI: true
 
@@ -85,13 +86,14 @@ jobs:
             cfg.bundle = cfg.bundle || {};
             cfg.bundle.macOS = cfg.bundle.macOS || {};
             cfg.bundle.macOS.hardenedRuntime = false;
-            cfg.bundle.macOS.frameworks = [];
+            cfg.bundle.macOS.signingIdentity = null;
+            delete cfg.bundle.macOS.frameworks;
             fs.writeFileSync('tauri.conf.json', JSON.stringify(cfg, null, 2));
             console.log('Disabled macOS code signing for CI');
           "
 
       - name: Build Tauri app (Apple Silicon)
-        run: cd src && npx tauri build
+        run: npx tauri build
         env:
           CI: true
 

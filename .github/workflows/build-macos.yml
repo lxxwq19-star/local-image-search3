@@ -24,14 +24,15 @@ jobs:
           targets: x86_64-apple-darwin
 
       - name: Install frontend dependencies
-        run: cd src && npm install
+        run: npm install
+        working-directory: src
 
       - name: Build frontend
-        run: cd src && npm run build
+        run: npm run build
+        working-directory: src
 
       - name: Disable macOS code signing for CI
         run: |
-          cd src-tauri
           node -e "
             const fs = require('fs');
             const cfg = JSON.parse(fs.readFileSync('tauri.conf.json', 'utf8'));
@@ -43,11 +44,13 @@ jobs:
             fs.writeFileSync('tauri.conf.json', JSON.stringify(cfg, null, 2));
             console.log('Disabled macOS code signing for CI');
           "
+        working-directory: src-tauri
+
+      - name: Add Tauri CLI to PATH
+        run: echo "${{ github.workspace }}/src/node_modules/.bin" >> $GITHUB_PATH
 
       - name: Build Tauri app (Intel)
-        run: npx tauri build
-        env:
-          CI: true
+        run: tauri build
 
       - name: Upload Intel artifact
         uses: actions/upload-artifact@v4
@@ -72,14 +75,15 @@ jobs:
           targets: aarch64-apple-darwin
 
       - name: Install frontend dependencies
-        run: cd src && npm install
+        run: npm install
+        working-directory: src
 
       - name: Build frontend
-        run: cd src && npm run build
+        run: npm run build
+        working-directory: src
 
       - name: Disable macOS code signing for CI
         run: |
-          cd src-tauri
           node -e "
             const fs = require('fs');
             const cfg = JSON.parse(fs.readFileSync('tauri.conf.json', 'utf8'));
@@ -91,11 +95,13 @@ jobs:
             fs.writeFileSync('tauri.conf.json', JSON.stringify(cfg, null, 2));
             console.log('Disabled macOS code signing for CI');
           "
+        working-directory: src-tauri
+
+      - name: Add Tauri CLI to PATH
+        run: echo "${{ github.workspace }}/src/node_modules/.bin" >> $GITHUB_PATH
 
       - name: Build Tauri app (Apple Silicon)
-        run: npx tauri build
-        env:
-          CI: true
+        run: tauri build
 
       - name: Upload ARM artifact
         uses: actions/upload-artifact@v4

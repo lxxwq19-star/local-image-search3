@@ -1,0 +1,5 @@
+# 强制使用动态 CRT (/MD)，匹配 ort 预编译二进制的 RuntimeLibrary
+# 否则 release 模式默认用 /MT (静态 CRT)，与 libort_sys 的 /MD 冲突 → LNK2038
+
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=-crt-static"]

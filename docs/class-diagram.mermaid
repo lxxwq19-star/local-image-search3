@@ -1,0 +1,53 @@
+classDiagram
+    %% ── Data Models ──
+
+    class OnnxModel {
+        +siglip2_vision: Option~Session~
+        +cliplarge_text: Option~Session~
+        +cliplarge_vision: Option~Session~              ~~~ NEW
+        +tokenizer: Option~ClipTokenizer~
+        +preprocessor: ImagePreprocessor
+        +execution_provider: String
+        +model_loaded: bool
+        +startup_error: Option~String~
+
+        +new() Result~Self, String~
+        +new_fallback(error: String) Self
+        +is_available() bool
+
+        +encode_text_clip_large(text: &str) Result~Vec~f32~, String~
+        +encode_image_siglip2(image_path: &str) Result~Vec~f32~, String~
+        +encode_image_clip_large(image_path: &str) Result~Vec~f32~, String~   ~~~ NEW
+
+        +encode_both_batch(paths: &[String]) Result~Vec~Result~(Vec~f32~, Vec~f32~), String~~, String~
+
+        -encode_single_both(path: &str) Result~(Vec~f32~, Vec~f32~), String~  ~~~ MODIFIED
+        -candidate_model_dirs() Vec~PathBuf~
+        -load_session(model_path: &Path, providers: &[ExecutionProviderDispatch]) Result~Session, String~
+        -detect_best_provider() Vec~ExecutionProviderDispatch~
+        -provider_name_str(providers: &[ExecutionProviderDispatch]) String
+    }
+
+    class ImagePreprocessor {
+        +preprocess_siglip2(path: &str) Result~Array4~f32~, String~
+        +preprocess_cliplarge(path: &str) Result~Array4~f32~, String~
+        -preprocess(path: &str, w: u32, h: u32, mean: &[f32;3], std: &[f32;3]) Result~Array4~f32~, String~
+    }
+
+    class DualIndex {
+        +text_index: VecIndex       ~~~ 768-dim index (was zeros, now real vectors)
+        +image_index: VecIndex      ~~~ 1024-dim index (unchanged)
+    }
+
+    class VecIndex {
+        +add(id: i64, vec: Vec~f32~)
+        +search(query: &[f32], top_k: usize) Vec~(i64, f32)~
+        +len() usize
+        +clear()
+    }
+
+    %% ── Relationships ──
+
+    OnnxModel *-- ImagePreprocessor : uses
+    OnnxModel o-- Session : manages 3 sessions
+    DualIndex *-- VecIndex : contains 2 indices

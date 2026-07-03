@@ -1,0 +1,102 @@
+name: Build macOS
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build-intel:
+    name: Build macOS Intel
+    runs-on: macos-13
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin
+
+      - name: Install frontend dependencies
+        run: cd src && npm install
+
+      - name: Build frontend
+        run: cd src && npm run build
+
+      - name: Disable macOS code signing for CI
+        run: |
+          cd src-tauri
+          node -e "
+            const fs = require('fs');
+            const cfg = JSON.parse(fs.readFileSync('tauri.conf.json', 'utf8'));
+            cfg.bundle = cfg.bundle || {};
+            cfg.bundle.macOS = cfg.bundle.macOS || {};
+            cfg.bundle.macOS.hardenedRuntime = false;
+            cfg.bundle.macOS.frameworks = [];
+            fs.writeFileSync('tauri.conf.json', JSON.stringify(cfg, null, 2));
+            console.log('Disabled macOS code signing for CI');
+          "
+
+      - name: Build Tauri app (Intel)
+        run: cd src && npx tauri build
+        env:
+          CI: true
+
+      - name: Upload Intel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-intel
+          path: src-tauri/target/release/bundle/dmg/*.dmg
+
+  build-arm:
+    name: Build macOS Apple Silicon
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Install frontend dependencies
+        run: cd src && npm install
+
+      - name: Build frontend
+        run: cd src && npm run build
+
+      - name: Disable macOS code signing for CI
+        run: |
+          cd src-tauri
+          node -e "
+            const fs = require('fs');
+            const cfg = JSON.parse(fs.readFileSync('tauri.conf.json', 'utf8'));
+            cfg.bundle = cfg.bundle || {};
+            cfg.bundle.macOS = cfg.bundle.macOS || {};
+            cfg.bundle.macOS.hardenedRuntime = false;
+            cfg.bundle.macOS.frameworks = [];
+            fs.writeFileSync('tauri.conf.json', JSON.stringify(cfg, null, 2));
+            console.log('Disabled macOS code signing for CI');
+          "
+
+      - name: Build Tauri app (Apple Silicon)
+        run: cd src && npx tauri build
+        env:
+          CI: true
+
+      - name: Upload ARM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-arm
+          path: src-tauri/target/release/bundle/dmg/*.dmg

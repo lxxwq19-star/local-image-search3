@@ -1,0 +1,20 @@
+[target.x86_64-pc-windows-msvc]
+# Force dynamic CRT across all crates (needed for ort on Windows).
+# Note: For Rust 1.96+, use individual `-C link-arg=` flags (not combined
+# space-separated via `-C link-args=`) to avoid LNK2005/LNK1169 in build
+# scripts. Also exclude libucrt.lib explicitly -- it conflicts with Rust's
+# default CRT handling. The remaining RuntimeLibrary mismatch between
+# esaxx_rs (static) and ort (dynamic) requires CXXFLAGS="-MD" at build time:
+#
+#   CXXFLAGS="-MD" cargo test
+#
+rustflags = [
+  "-C", "target-feature=-crt-static",
+  "-C", "link-arg=/NODEFAULTLIB:libcmt",
+  "-C", "link-arg=/NODEFAULTLIB:libcpmt",
+  "-C", "link-arg=msvcrt.lib",
+  "-C", "link-arg=msvcprt.lib",
+]
+
+[env]
+ORT_DYLIB_PATH = ""

@@ -1,0 +1,39 @@
+[package]
+name = "local-image-search"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tauri = { version = "2", features = ["protocol-asset", "devtools"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.31", features = ["bundled"] }
+ndarray = "0.16"
+tokenizers = "0.21"
+image = { version = "0.25", features = ["png", "jpeg", "gif", "bmp", "webp", "tiff"] }
+base64 = "0.21"
+tokio = { version = "1", features = ["full"] }
+walkdir = "2"
+sha2 = "0.10"
+imagesize = "0.13"
+rayon = "1"
+dirs = "5"
+open = "5"
+tauri-plugin-dialog = "2"
+tauri-plugin-shell = "2"
+
+# ort: Windows 用 DirectML 加速，macOS 用 CoreML，其他平台纯 CPU
+[target.'cfg(target_os = "windows")'.dependencies]
+ort = { version = "2.0.0-rc.12", features = ["directml"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+ort = { version = "2.0.0-rc.12" }
+
+[target.'cfg(not(any(target_os = "windows", target_os = "macos")))'.dependencies]
+ort = { version = "2.0.0-rc.12" }
+
+[patch.crates-io]
+esaxx-rs = { path = "esaxx-rs-fixed" }
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }

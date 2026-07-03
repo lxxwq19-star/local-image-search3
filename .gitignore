@@ -1,0 +1,33 @@
+# Dependencies
+node_modules/
+src/node_modules/
+
+# Build outputs
+src-tauri/target/
+src/dist/
+src/node_modules/.cache/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+npm-debug.log*
+
+# Rust
+**/*.rs.bk
+Cargo.lock
+
+# Environment
+.env
+
+# ONNX models (too large for GitHub, download separately)
+models/

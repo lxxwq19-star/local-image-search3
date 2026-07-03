@@ -1,0 +1,37 @@
+sequenceDiagram
+    participant UI as React Frontend
+    participant CMD as index_images (index.rs)
+    participant ONNX as OnnxModel (onnx.rs)
+    participant PRE as ImagePreprocessor (preprocessor.rs)
+    participant DB as SQLite
+    participant IDX as DualIndex
+
+    UI->>CMD: index_images(directory)
+    CMD->>ONNX: is_available()
+    ONNX-->>CMD: true
+    CMD->>ONNX: encode_both_batch(paths_chunk)
+
+    loop for each image path
+        ONNX->>ONNX: encode_single_both(path)
+        
+        ONNX->>PRE: preprocess_siglip2(path)
+        PRE-->>ONNX: Array4 (1,3,256,256)
+        ONNX->>ONNX: siglip2 session.run() → 1024-dim
+        ONNX->>ONNX: L2 normalize → siglip2_vec
+
+        ONNX->>PRE: preprocess_cliplarge(path)       ~~~ NEW
+        PRE-->>ONNX: Array4 (1,3,224,224)
+        ONNX->>ONNX: cliplarge_vision session.run() → 768-dim
+        ONNX->>ONNX: L2 normalize → clip_vision_vec
+
+        ONNX-->>CMD: Ok((siglip2_1024, clip_vision_768))
+    end
+
+    CMD-->>CMD: siglip2_blob = serialize(siglip2_vec)
+    CMD-->>CMD: clip_blob = serialize(clip_vec)
+    CMD->>DB: insert_or_update_image(clip_vector=clip_blob, ...)
+    DB-->>CMD: db_id
+
+    CMD->>IDX: text_index.add(db_id, clip_vec)       ~~~ NOW REAL VECTORS
+    CMD->>IDX: image_index.add(db_id, siglip2_vec)
+    CMD-->>UI: progress / complete
